@@ -5,6 +5,10 @@ target_sources(HelloDXR PRIVATE
     HelloDXR.h
     HelloDXR.3d.slang
     HelloDXR.rt.slang
+    HelloDXR_shadow.rt.slang
+    HelloDXR_overlap.rt.slang
+    HelloDXR_no_shadow.rt.slang
+    HelloDXR_upsample.rt.slang
 )
 
 target_copy_shaders(HelloDXR Samples/HelloDXR)

@@ -29,6 +29,7 @@
 #include "Falcor.h"
 #include "Core/SampleApp.h"
 #include "Core/Pass/RasterPass.h"
+#include "Core/Pass/FullScreenPass.h"
 
 using namespace Falcor;
 
@@ -50,6 +51,8 @@ private:
     void setPerFrameVars(const Fbo* pTargetFbo);
     void renderRaster(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
     void renderRT(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
+    void renderCoarsePixelShadingRT(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
+    void upsampleShadow(RenderContext* pRenderContext);
 
     ref<Scene> mpScene;
     ref<Camera> mpCamera;
@@ -60,8 +63,31 @@ private:
     ref<RtProgramVars> mpRtVars;
     ref<Texture> mpRtOut;
 
+    ref<Program> mpRaytraceNoShadowProgram;
+    ref<RtProgramVars> mpRtNoShadowVars;
+    ref<Texture> mpRtNoShadowOut;
+
+    ref<Program> mpShadowRaytraceProgram;
+    ref<RtProgramVars> mpShadowRtVars;
+    ref<Texture> mpShadowRtOut;
+
+    ref<ComputePass> mpNNUpsamplePass;
+    ref<ComputePass> mpBiLinearUpsamplePass;
+
+    ref<Texture> mpOverlapNormalIn;
+    ref<Texture> mpOverlapShadowIn;
+    ref<Texture> mpShadowTexture;
+    ref<Texture> mpShadowUpsampleTexture;
+    ref<FullScreenPass> mpOverlapPass;
+    ref<GraphicsState> mpGfxState;
+    ref<Fbo> mpOverlapOut;
+    ref<Fbo> mpTempFbo1;
+    ref<Fbo> mpTempFbo2;
+    ref<Fbo> mpTempFbo3;
+
     bool mRayTrace = true;
     bool mUseDOF = false;
+    bool mUseCoarsePixelShading = false;
 
     uint32_t mSampleIndex = 0xdeadbeef;
 };

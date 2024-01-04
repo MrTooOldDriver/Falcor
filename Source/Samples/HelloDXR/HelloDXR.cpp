@@ -63,6 +63,39 @@ void HelloDXR::onResize(uint32_t width, uint32_t height)
     mpRtOut = getDevice()->createTexture2D(
         width, height, ResourceFormat::RGBA16Float, 1, 1, nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
     );
+
+    mpRtNoShadowOut = getDevice()->createTexture2D(
+        width, height, ResourceFormat::RGBA16Float, 1, 1, nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+    );
+
+    mpShadowRtOut = getDevice()->createTexture2D(
+        width / 2,
+        height / 2,
+        ResourceFormat::RGBA16Float,
+        1,
+        1,
+        nullptr,
+        ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+    );
+
+    mpShadowTexture = getDevice()->createTexture2D(
+        width / 2,
+        height / 2,
+        ResourceFormat::RGBA16Float,
+        1,
+        1,
+        nullptr,
+        ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+    );
+
+    mpShadowUpsampleTexture = getDevice()->createTexture2D(
+        width, height, ResourceFormat::RGBA16Float, 1, 1, nullptr, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
+    );
+
+    mpOverlapOut = Fbo::create2D(getDevice(), width, height, ResourceFormat::RGBA16Float);
+    mpTempFbo1 = Fbo::create2D(getDevice(), width, height, ResourceFormat::RGBA16Float);
+    mpTempFbo2 = Fbo::create2D(getDevice(), width/2, height/2, ResourceFormat::RGBA16Float);
+    mpTempFbo3 = Fbo::create2D(getDevice(), width, height, ResourceFormat::RGBA16Float);
 }
 
 void HelloDXR::onFrameRender(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
@@ -78,7 +111,14 @@ void HelloDXR::onFrameRender(RenderContext* pRenderContext, const ref<Fbo>& pTar
             FALCOR_THROW("This sample does not support scene changes that require shader recompilation.");
 
         if (mRayTrace)
-            renderRT(pRenderContext, pTargetFbo);
+            if (mUseCoarsePixelShading)
+            {
+                renderCoarsePixelShadingRT(pRenderContext, pTargetFbo);
+            }
+            else
+            {
+                renderRT(pRenderContext, pTargetFbo);
+            }
         else
             renderRaster(pRenderContext, pTargetFbo);
     }
@@ -92,6 +132,7 @@ void HelloDXR::onGuiRender(Gui* pGui)
 
     w.checkbox("Ray Trace", mRayTrace);
     w.checkbox("Use Depth of Field", mUseDOF);
+    w.checkbox("Use Coarse Pixel Shading RT", mUseCoarsePixelShading);
     if (w.button("Load Scene"))
     {
         std::filesystem::path path;
@@ -185,6 +226,54 @@ void HelloDXR::loadScene(const std::filesystem::path& path, const Fbo* pTargetFb
 
     mpRaytraceProgram = Program::create(getDevice(), rtProgDesc, defines);
     mpRtVars = RtProgramVars::create(getDevice(), mpRaytraceProgram, sbt);
+
+    // Modify version, no shadow ray
+    ProgramDesc noShadowProgDesc;
+    noShadowProgDesc.addShaderModules(shaderModules);
+    noShadowProgDesc.addShaderLibrary("Samples/HelloDXR/HelloDXR_no_shadow.rt.slang");
+    noShadowProgDesc.addTypeConformances(typeConformances);
+    noShadowProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
+                                                   // primary-ray ClosestHit shader for reflections, 1 for reflection ray
+                                                   // tracing a shadow ray
+    noShadowProgDesc.setMaxPayloadSize(24);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
+                                                   // should be set as small as possible for maximum performance.
+
+    ref<RtBindingTable> noShadowSbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
+    noShadowSbt->setRayGen(noShadowProgDesc.addRayGen("rayGen"));
+    noShadowSbt->setMiss(0, noShadowProgDesc.addMiss("primaryMiss"));
+    noShadowSbt->setMiss(1, noShadowProgDesc.addMiss("shadowMiss"));
+    auto noShadowPrimary = noShadowProgDesc.addHitGroup("primaryClosestHit", "primaryAnyHit");
+    auto noShadowShadow = noShadowProgDesc.addHitGroup("", "shadowAnyHit");
+    noShadowSbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), noShadowPrimary);
+    noShadowSbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), noShadowShadow);
+
+    mpRaytraceNoShadowProgram = Program::create(getDevice(), noShadowProgDesc, defines);
+    mpRtNoShadowVars = RtProgramVars::create(getDevice(), mpRaytraceNoShadowProgram, noShadowSbt);
+
+    // Modify version, only calculate the shadow ray
+    ProgramDesc shadowProgDesc;
+    shadowProgDesc.addShaderModules(mpScene->getShaderModules());
+    shadowProgDesc.addShaderLibrary("Samples/HelloDXR/HelloDXR_shadow.rt.slang");
+    shadowProgDesc.addTypeConformances(typeConformances);
+    shadowProgDesc.setMaxTraceRecursionDepth(3); // Only need to trace the shadow ray
+    shadowProgDesc.setMaxPayloadSize(24);        // The largest ray payload struct (PrimaryRayData) is 24 bytes
+
+    ref<RtBindingTable> shadowSbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
+    shadowSbt->setRayGen(shadowProgDesc.addRayGen("rayGen"));
+    shadowSbt->setMiss(0, shadowProgDesc.addMiss("primaryMiss"));
+    shadowSbt->setMiss(1, shadowProgDesc.addMiss("shadowMiss"));
+    auto shadowPrimary = shadowProgDesc.addHitGroup("primaryClosestHit", "primaryAnyHit");
+    auto shadowOnly = shadowProgDesc.addHitGroup("", "shadowAnyHit");
+    shadowSbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadowPrimary);
+    shadowSbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadowOnly);
+
+    mpShadowRaytraceProgram = Program::create(getDevice(), shadowProgDesc, defines);
+    mpShadowRtVars = RtProgramVars::create(getDevice(), mpShadowRaytraceProgram, shadowSbt);
+
+    // Initialize upsample shader
+    mpNNUpsamplePass = ComputePass::create(getDevice(), "Samples/HelloDXR/HelloDXR_upsample.rt.slang", "nearest_neighbour_upsample");
+    mpBiLinearUpsamplePass = ComputePass::create(getDevice(), "Samples/HelloDXR/HelloDXR_upsample.rt.slang", "bi_linear_upsample");
+    mpOverlapPass = FullScreenPass::create(getDevice(), "Samples/HelloDXR/HelloDXR_overlap.rt.slang");
 }
 
 void HelloDXR::setPerFrameVars(const Fbo* pTargetFbo)
@@ -197,6 +286,32 @@ void HelloDXR::setPerFrameVars(const Fbo* pTargetFbo)
     var["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
     var["PerFrameCB"]["useDOF"] = mUseDOF;
     var["gOutput"] = mpRtOut;
+
+    var = mpRtNoShadowVars->getRootVar();
+    var["PerFrameCB"]["invView"] = inverse(mpCamera->getViewMatrix());
+    var["PerFrameCB"]["viewportDims"] = float2(pTargetFbo->getWidth(), pTargetFbo->getHeight());
+    fovY = focalLengthToFovY(mpCamera->getFocalLength(), Camera::kDefaultFrameHeight);
+    var["PerFrameCB"]["tanHalfFovY"] = std::tan(fovY * 0.5f);
+    var["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
+    var["PerFrameCB"]["useDOF"] = mUseDOF;
+    var["gOutput"] = mpRtNoShadowOut;
+
+    var = mpShadowRtVars->getRootVar();
+    var["PerFrameCB"]["invView"] = inverse(mpCamera->getViewMatrix());
+    var["PerFrameCB"]["viewportDims"] = float2(pTargetFbo->getWidth() / 2, pTargetFbo->getHeight() / 2);
+    fovY = focalLengthToFovY(mpCamera->getFocalLength(), Camera::kDefaultFrameHeight);
+    var["PerFrameCB"]["tanHalfFovY"] = std::tan(fovY * 0.5f);
+    var["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
+    var["PerFrameCB"]["useDOF"] = mUseDOF;
+    var["gOutput"] = mpShadowRtOut;
+
+    auto overlapVar = mpOverlapPass->getVars()->getRootVar();
+    overlapVar["gNormalFrame"] = mpOverlapNormalIn;
+    overlapVar["gShadowFrame"] = mpOverlapShadowIn;
+
+    auto upsampleVar = mpNNUpsamplePass->getVars()->getRootVar();
+    upsampleVar["gShadowFrame"] = mpShadowTexture;
+    upsampleVar["gUpsampledShadowFrame"] = mpShadowUpsampleTexture;
 }
 
 void HelloDXR::renderRaster(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
@@ -218,6 +333,61 @@ void HelloDXR::renderRT(RenderContext* pRenderContext, const ref<Fbo>& pTargetFb
     pRenderContext->clearUAV(mpRtOut->getUAV().get(), kClearColor);
     mpScene->raytrace(pRenderContext, mpRaytraceProgram.get(), mpRtVars, uint3(pTargetFbo->getWidth(), pTargetFbo->getHeight(), 1));
     pRenderContext->blit(mpRtOut->getSRV(), pTargetFbo->getRenderTargetView(0));
+}
+
+void HelloDXR::renderCoarsePixelShadingRT(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
+{
+    FALCOR_ASSERT(mpScene);
+    FALCOR_PROFILE(pRenderContext, "renderRT");
+
+    setPerFrameVars(pTargetFbo.get());
+
+    pRenderContext->clearUAV(mpRtNoShadowOut->getUAV().get(), kClearColor);
+    pRenderContext->clearUAV(mpShadowRtOut->getUAV().get(), kClearColor);
+
+    mpScene->raytrace(
+        pRenderContext, mpShadowRaytraceProgram.get(), mpShadowRtVars, uint3(pTargetFbo->getWidth(), pTargetFbo->getHeight(), 1)
+    );
+    mpScene->raytrace(
+        pRenderContext, mpRaytraceNoShadowProgram.get(), mpRtNoShadowVars, uint3(pTargetFbo->getWidth(), pTargetFbo->getHeight(), 1)
+    );
+    pRenderContext->uavBarrier(mpRtNoShadowOut.get()); // Ensure that the original ray tracing is finished before reading its result
+    pRenderContext->uavBarrier(mpShadowRtOut.get());   // Ensure that the shadow ray tracing is finished before reading its result
+
+    // TODO FIX WITH RWTexture2D?
+
+    pRenderContext->blit(mpRtNoShadowOut->getSRV(), mpTempFbo1->getRenderTargetView(0));
+    mpOverlapNormalIn = mpTempFbo1->getColorTexture(0);
+
+    pRenderContext->blit(mpShadowRtOut->getSRV(), mpTempFbo2->getRenderTargetView(0));
+    mpShadowTexture = mpTempFbo2->getColorTexture(0);
+
+    // TODO FIX WITH SWITCH
+    if (false){
+        pRenderContext->clearUAV(mpShadowUpsampleTexture->getUAV().get(), kClearColor);
+        upsampleShadow(pRenderContext);
+
+        pRenderContext->blit(mpShadowUpsampleTexture->getSRV(), mpTempFbo3->getRenderTargetView(0));
+        mpOverlapShadowIn = mpTempFbo3->getColorTexture(0);
+    }else{
+        pRenderContext->blit(mpShadowTexture->getSRV(), mpTempFbo3->getRenderTargetView(0));
+        mpOverlapShadowIn = mpTempFbo3->getColorTexture(0);
+    }
+
+    mpOverlapPass->execute(pRenderContext, mpOverlapOut);
+    auto outputTex = mpOverlapOut->getColorTexture(0);
+
+    // TODO CHECK SHADOW SAMPLER
+    pRenderContext->blit(outputTex->getSRV(), pTargetFbo->getRenderTargetView(0));
+}
+
+void HelloDXR::upsampleShadow(RenderContext* pRenderContext)
+{
+    uint3 dispatchDims;
+    dispatchDims.x = mpShadowUpsampleTexture->getWidth();
+    dispatchDims.y = mpShadowUpsampleTexture->getHeight();
+    dispatchDims.z = 1; // For 2D textures, the Z dimension should be 1
+    mpNNUpsamplePass->execute(pRenderContext, dispatchDims);
 }
 
 int runMain(int argc, char** argv)
