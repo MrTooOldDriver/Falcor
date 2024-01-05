@@ -86,9 +86,11 @@ private:
     ref<Fbo> mpTempFbo2;
     ref<Fbo> mpTempFbo3;
 
-    float mGUIShadowRenderFactor = 1.0f;
     float shadowRenderFactor = 1.0f;
 
+    uint32_t currentDebugView = 0;
+
+    bool hasShadowRenderedChanged = false;
     bool mRayTrace = true;
     bool mUseDOF = false;
     bool mUseCoarsePixelShading = false;

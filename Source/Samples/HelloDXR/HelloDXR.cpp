@@ -115,7 +115,17 @@ void HelloDXR::onGuiRender(Gui* pGui)
     w.checkbox("Ray Trace", mRayTrace);
     w.checkbox("Use Depth of Field", mUseDOF);
     w.checkbox("Use Coarse Pixel Shading RT", mUseCoarsePixelShading);
-    w.slider("Shadow Render factor", mGUIShadowRenderFactor, 1.0f, 4.0f);
+    hasShadowRenderedChanged =  w.slider("Shadow Render factor", shadowRenderFactor, 1.0f, 4.0f);
+
+    Gui::DropdownList debugViewOptions = {
+        {0, "Overlapped (Final)"},
+        {1, "No Shadow RT"},
+        {2, "Shadow RT"},
+        {3, "Shadow RT Upsampled"}
+    };
+
+    w.dropdown("Debug View", debugViewOptions, currentDebugView);
+
     if (w.button("Load Scene"))
     {
         std::filesystem::path path;
@@ -324,9 +334,8 @@ void HelloDXR::renderCoarsePixelShadingRT(RenderContext* pRenderContext, const r
     FALCOR_ASSERT(mpScene);
     FALCOR_PROFILE(pRenderContext, "renderRT");
 
-    if (shadowRenderFactor != mGUIShadowRenderFactor)
+    if (hasShadowRenderedChanged)
     {
-        shadowRenderFactor = mGUIShadowRenderFactor;
         onShadowRenderFactorChange();
     }
 
@@ -353,13 +362,16 @@ void HelloDXR::renderCoarsePixelShadingRT(RenderContext* pRenderContext, const r
     mpShadowTexture = mpTempFbo2->getColorTexture(0);
 
     // TODO CHANGE TO SWITCH BETWEEN NN AND BILINEAR
-    if (true){
+    if (true)
+    {
         pRenderContext->clearUAV(mpShadowUpsampleTexture->getUAV().get(), kClearColor);
         upsampleShadow(pRenderContext);
 
         pRenderContext->blit(mpShadowUpsampleTexture->getSRV(), mpTempFbo3->getRenderTargetView(0));
         mpOverlapShadowIn = mpTempFbo3->getColorTexture(0);
-    }else{
+    }
+    else
+    {
         pRenderContext->blit(mpShadowTexture->getSRV(), mpTempFbo3->getRenderTargetView(0));
         mpOverlapShadowIn = mpTempFbo3->getColorTexture(0);
     }
@@ -372,7 +384,25 @@ void HelloDXR::renderCoarsePixelShadingRT(RenderContext* pRenderContext, const r
     auto outputTex = mpOverlapOut->getColorTexture(0);
 
     // TODO CHECK SHADOW SAMPLER
-    pRenderContext->blit(outputTex->getSRV(), pTargetFbo->getRenderTargetView(0));
+
+    if (currentDebugView == 0)
+    {
+        pRenderContext->blit(outputTex->getSRV(), pTargetFbo->getRenderTargetView(0));
+    }
+    else if (currentDebugView == 1)
+    {
+        pRenderContext->blit(mpRtNoShadowOut->getSRV(), pTargetFbo->getRenderTargetView(0));
+    }
+    else if (currentDebugView == 2)
+    {
+        pRenderContext->blit(mpShadowRtOut->getSRV(), pTargetFbo->getRenderTargetView(0));
+    }
+    else if (currentDebugView == 3)
+    {
+        pRenderContext->blit(mpShadowUpsampleTexture->getSRV(), pTargetFbo->getRenderTargetView(0));
+    }
+    else
+        FALCOR_THROW("Invalid debug view selected");
 }
 
 void HelloDXR::upsampleShadow(RenderContext* pRenderContext)

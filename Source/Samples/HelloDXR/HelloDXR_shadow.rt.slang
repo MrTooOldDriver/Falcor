@@ -67,7 +67,7 @@ void shadowAnyHit(inout ShadowRayData hitData, BuiltInTriangleIntersectionAttrib
 [shader("miss")]
 void primaryMiss(inout PrimaryRayData hitData)
 {
-    hitData.color = float4(0.38f, 0.52f, 0.10f, 1.f);
+    hitData.color = float4(0.0f, 0.0f, 0.0f, 1.f);
     hitData.hitT = -1.f;
 }
 
