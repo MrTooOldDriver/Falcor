@@ -1,11 +1,12 @@
 Texture2D<float4> gShadowFrame;  // Half-resolution shadow texture
 RWTexture2D<float4> gUpsampledShadowFrame;  // Full-resolution shadow texture
+float shadowFactor;
 
 [numthreads(16, 16, 1)]
 void nearest_neighbour_upsample(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
     // Calculate the corresponding position in the half-resolution texture
-    float2 halfResPos = dispatchThreadID.xy / 2;
+    float2 halfResPos = dispatchThreadID.xy / shadowFactor;
 
     // Sample the half-resolution texture
     float4 shadowColor = gShadowFrame.Load(int3(halfResPos, 0));
@@ -18,7 +19,7 @@ void nearest_neighbour_upsample(uint3 dispatchThreadID: SV_DispatchThreadID)
 void bi_linear_upsample(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     // Calculate the corresponding position in the half-resolution texture
-    float2 halfResPos = dispatchThreadID.xy / 2.0f;
+    float2 halfResPos = dispatchThreadID.xy / shadowFactor;
 
     // Calculate the four nearest pixels in the half-resolution texture
     uint2 topLeft = uint2(halfResPos);

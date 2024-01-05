@@ -33,6 +33,7 @@ FALCOR_EXPORT_D3D12_AGILITY_SDK
 
 static const float4 kClearColor(0.38f, 0.52f, 0.10f, 1);
 static const std::string kDefaultScene = "Arcade/Arcade.pyscene";
+// static const std::string kDefaultScene = "test_scenes/animated_cubese/animated_cubese.pyscene";
 
 HelloDXR::HelloDXR(const SampleAppConfig& config) : SampleApp(config) {}
 
@@ -68,25 +69,7 @@ void HelloDXR::onResize(uint32_t width, uint32_t height)
         width, height, ResourceFormat::RGBA16Float, 1, 1, nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
     );
 
-    mpShadowRtOut = getDevice()->createTexture2D(
-        width / 2,
-        height / 2,
-        ResourceFormat::RGBA16Float,
-        1,
-        1,
-        nullptr,
-        ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
-    );
-
-    mpShadowTexture = getDevice()->createTexture2D(
-        width / 2,
-        height / 2,
-        ResourceFormat::RGBA16Float,
-        1,
-        1,
-        nullptr,
-        ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
-    );
+    onShadowRenderFactorChange();
 
     mpShadowUpsampleTexture = getDevice()->createTexture2D(
         width, height, ResourceFormat::RGBA16Float, 1, 1, nullptr, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
@@ -94,7 +77,6 @@ void HelloDXR::onResize(uint32_t width, uint32_t height)
 
     mpOverlapOut = Fbo::create2D(getDevice(), width, height, ResourceFormat::RGBA16Float);
     mpTempFbo1 = Fbo::create2D(getDevice(), width, height, ResourceFormat::RGBA16Float);
-    mpTempFbo2 = Fbo::create2D(getDevice(), width/2, height/2, ResourceFormat::RGBA16Float);
     mpTempFbo3 = Fbo::create2D(getDevice(), width, height, ResourceFormat::RGBA16Float);
 }
 
@@ -133,6 +115,7 @@ void HelloDXR::onGuiRender(Gui* pGui)
     w.checkbox("Ray Trace", mRayTrace);
     w.checkbox("Use Depth of Field", mUseDOF);
     w.checkbox("Use Coarse Pixel Shading RT", mUseCoarsePixelShading);
+    w.slider("Shadow Render factor", mGUIShadowRenderFactor, 1.0f, 4.0f);
     if (w.button("Load Scene"))
     {
         std::filesystem::path path;
@@ -298,7 +281,7 @@ void HelloDXR::setPerFrameVars(const Fbo* pTargetFbo)
 
     var = mpShadowRtVars->getRootVar();
     var["PerFrameCB"]["invView"] = inverse(mpCamera->getViewMatrix());
-    var["PerFrameCB"]["viewportDims"] = float2(pTargetFbo->getWidth() / 2, pTargetFbo->getHeight() / 2);
+    var["PerFrameCB"]["viewportDims"] = float2(pTargetFbo->getWidth() / shadowRenderFactor, pTargetFbo->getHeight() / shadowRenderFactor);
     fovY = focalLengthToFovY(mpCamera->getFocalLength(), Camera::kDefaultFrameHeight);
     var["PerFrameCB"]["tanHalfFovY"] = std::tan(fovY * 0.5f);
     var["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
@@ -312,6 +295,7 @@ void HelloDXR::setPerFrameVars(const Fbo* pTargetFbo)
     auto upsampleVar = mpNNUpsamplePass->getVars()->getRootVar();
     upsampleVar["gShadowFrame"] = mpShadowTexture;
     upsampleVar["gUpsampledShadowFrame"] = mpShadowUpsampleTexture;
+    upsampleVar["shadowFactor"] = shadowRenderFactor;
 }
 
 void HelloDXR::renderRaster(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo)
@@ -340,6 +324,12 @@ void HelloDXR::renderCoarsePixelShadingRT(RenderContext* pRenderContext, const r
     FALCOR_ASSERT(mpScene);
     FALCOR_PROFILE(pRenderContext, "renderRT");
 
+    if (shadowRenderFactor != mGUIShadowRenderFactor)
+    {
+        shadowRenderFactor = mGUIShadowRenderFactor;
+        onShadowRenderFactorChange();
+    }
+
     setPerFrameVars(pTargetFbo.get());
 
     pRenderContext->clearUAV(mpRtNoShadowOut->getUAV().get(), kClearColor);
@@ -362,8 +352,8 @@ void HelloDXR::renderCoarsePixelShadingRT(RenderContext* pRenderContext, const r
     pRenderContext->blit(mpShadowRtOut->getSRV(), mpTempFbo2->getRenderTargetView(0));
     mpShadowTexture = mpTempFbo2->getColorTexture(0);
 
-    // TODO FIX WITH SWITCH
-    if (false){
+    // TODO CHANGE TO SWITCH BETWEEN NN AND BILINEAR
+    if (true){
         pRenderContext->clearUAV(mpShadowUpsampleTexture->getUAV().get(), kClearColor);
         upsampleShadow(pRenderContext);
 
@@ -373,6 +363,10 @@ void HelloDXR::renderCoarsePixelShadingRT(RenderContext* pRenderContext, const r
         pRenderContext->blit(mpShadowTexture->getSRV(), mpTempFbo3->getRenderTargetView(0));
         mpOverlapShadowIn = mpTempFbo3->getColorTexture(0);
     }
+
+    // TODO TEMP CODE FOR CHECKING SHADOW RENDER
+    //    pRenderContext->blit(mpShadowRtOut->getSRV(), mpTempFbo3->getRenderTargetView(0));
+    //    mpOverlapShadowIn = mpTempFbo3->getColorTexture(0);
 
     mpOverlapPass->execute(pRenderContext, mpOverlapOut);
     auto outputTex = mpOverlapOut->getColorTexture(0);
@@ -388,6 +382,36 @@ void HelloDXR::upsampleShadow(RenderContext* pRenderContext)
     dispatchDims.y = mpShadowUpsampleTexture->getHeight();
     dispatchDims.z = 1; // For 2D textures, the Z dimension should be 1
     mpNNUpsamplePass->execute(pRenderContext, dispatchDims);
+}
+
+void HelloDXR::onShadowRenderFactorChange()
+{
+    float width = getTargetFbo()->getWidth();
+    float height = getTargetFbo()->getHeight();
+
+    mpShadowRtOut = getDevice()->createTexture2D(
+        (uint32_t)(width / shadowRenderFactor),
+        (uint32_t)(height / shadowRenderFactor),
+        ResourceFormat::RGBA16Float,
+        1,
+        1,
+        nullptr,
+        ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+    );
+
+    mpShadowTexture = getDevice()->createTexture2D(
+        (uint32_t)(width / shadowRenderFactor),
+        (uint32_t)(height / shadowRenderFactor),
+        ResourceFormat::RGBA16Float,
+        1,
+        1,
+        nullptr,
+        ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+    );
+
+    mpTempFbo2 = Fbo::create2D(
+        getDevice(), (uint32_t)(width / shadowRenderFactor), (uint32_t)(height / shadowRenderFactor), ResourceFormat::RGBA16Float
+    );
 }
 
 int runMain(int argc, char** argv)

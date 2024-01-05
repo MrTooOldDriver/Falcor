@@ -53,6 +53,7 @@ private:
     void renderRT(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
     void renderCoarsePixelShadingRT(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
     void upsampleShadow(RenderContext* pRenderContext);
+    void onShadowRenderFactorChange();
 
     ref<Scene> mpScene;
     ref<Camera> mpCamera;
@@ -84,6 +85,9 @@ private:
     ref<Fbo> mpTempFbo1;
     ref<Fbo> mpTempFbo2;
     ref<Fbo> mpTempFbo3;
+
+    float mGUIShadowRenderFactor = 1.0f;
+    float shadowRenderFactor = 1.0f;
 
     bool mRayTrace = true;
     bool mUseDOF = false;
