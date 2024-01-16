@@ -1,3 +1,9 @@
+# Ray Tracing Coarse Pixel Shading
+
+This repo contains my project code for implementing the Coarse Pixel Shading in ray tracing based on Falcor.
+
+This project is part of L352 Advanced Graphics and Image Processing course at the University of Cambridge.
+
 ![](docs/images/teaser.png)
 
 # Falcor
