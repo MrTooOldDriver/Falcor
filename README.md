@@ -4,6 +4,8 @@ This repo contains my project code for implementing the Coarse Pixel Shading in 
 
 This project is part of L352 Advanced Graphics and Image Processing course at the University of Cambridge.
 
+Please build anr run HellowDXR sample to see the result.
+
 ![](docs/images/teaser.png)
 
 # Falcor
