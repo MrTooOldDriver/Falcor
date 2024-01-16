@@ -29,12 +29,17 @@ import Scene.Raytracing;
 import Utils.Sampling.TinyUniformSampleGenerator;
 import Rendering.Lights.LightHelpers;
 
+Texture2D<uint> gShadowInput;
 RWTexture2D<float4> gOutput;
 
 cbuffer PerFrameCB
 {
     float4x4 invView;
     float2 viewportDims;
+    float4x4 viewMatrix;
+    float4x4 projectMatrix;
+    uint imageHeight;
+    uint imageWidth;
     float tanHalfFovY;
     uint sampleIndex;
     bool useDOF;
@@ -129,18 +134,38 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     uint3 launchIndex = DispatchRaysIndex();
     TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(launchIndex.xy, sampleIndex);
 
+    // Calculate the pos in camera image plane
+    float3 hitPointCameraSpace = mul(viewMatrix, float4(sd.posW, 1)).xyz;
+    float4 hitPointNDC = mul(projectMatrix, float4(hitPointCameraSpace, 1));
+    hitPointNDC.xyz /= hitPointNDC.w;
+    float2 imagePlaneCoords;
+    imagePlaneCoords.x = (hitPointNDC.x + 1) * 0.5 * imageWidth;
+    imagePlaneCoords.y = (1 - hitPointNDC.y) * 0.5 * imageHeight; // Y is flipped in NDC
+
     // Direct lighting from analytic light sources.
-    for (int i = 0; i < gScene.getLightCount(); i++)
-    {
-        AnalyticLightSample ls;
-        if (evalLightApproximate(sd.posW, gScene.getLight(i), ls))
+    if (gShadowInput[imagePlaneCoords] != 0) {
+        for (int i = 0; i < gScene.getLightCount(); i++)
         {
-            RayDesc shadowRay = { sd.posW, 0.001f, ls.dir, ls.distance };
-            // if (!traceShadowRay(shadowRay))
-            // {
-            //     color += mi.eval(sd, ls.dir, sg) * ls.Li;
-            // }
-            color += mi.eval(sd, ls.dir, sg) * ls.Li;
+            AnalyticLightSample ls;
+            if (evalLightApproximate(sd.posW, gScene.getLight(i), ls))
+            {
+                RayDesc shadowRay = { sd.posW, 0.001f, ls.dir, ls.distance };
+                if (!traceShadowRay(shadowRay))
+                {
+                    color += mi.eval(sd, ls.dir, sg) * ls.Li;
+                } else {
+                    mi.eval(sd, ls.dir, sg) * ls.Li;
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < gScene.getLightCount(); i++)
+        {
+            AnalyticLightSample ls;
+            if (evalLightApproximate(sd.posW, gScene.getLight(i), ls))
+            {
+                color += mi.eval(sd, ls.dir, sg) * ls.Li;
+            }
         }
     }
 

@@ -29,12 +29,16 @@ import Scene.Raytracing;
 import Utils.Sampling.TinyUniformSampleGenerator;
 import Rendering.Lights.LightHelpers;
 
-RWTexture2D<float4> gOutput;
+RWTexture2D<uint> gOutput;
 
 cbuffer PerFrameCB
 {
     float4x4 invView;
     float2 viewportDims;
+    float4x4 viewMatrix;
+    float4x4 projectMatrix;
+    uint imageHeight;
+    uint imageWidth;
     float tanHalfFovY;
     uint sampleIndex;
     bool useDOF;
@@ -42,7 +46,7 @@ cbuffer PerFrameCB
 
 struct PrimaryRayData
 {
-    float4 color;
+    uint shadow;
     uint depth;
     float hitT;
 };
@@ -67,7 +71,7 @@ void shadowAnyHit(inout ShadowRayData hitData, BuiltInTriangleIntersectionAttrib
 [shader("miss")]
 void primaryMiss(inout PrimaryRayData hitData)
 {
-    hitData.color = float4(0.0f, 0.0f, 0.0f, 1.f);
+    hitData.shadow = 0;
     hitData.hitT = -1.f;
 }
 
@@ -93,13 +97,6 @@ float3 getReflectionColor(const ShadingData sd, const BSDFProperties bsdfPropert
         ray.TMin = 0.001f;
         ray.TMax = 100000.f;
         TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index*/, rayTypeCount, 0, ray, secondaryRay);
-
-        // A very non-PBR inaccurate way to do reflections.
-        reflectColor = secondaryRay.hitT < 0.f ? float3(0.f) : secondaryRay.color.rgb;
-        float falloff = max(1.f, (secondaryRay.hitT * secondaryRay.hitT));
-        reflectColor *= 20.f / falloff;
-        float ggxAlpha = min(0.5f, max(1e-8f, bsdfProperties.roughness * bsdfProperties.roughness));
-        reflectColor += bsdfProperties.specularReflectance * reflectColor * (ggxAlpha * ggxAlpha);
     }
     return reflectColor;
 }
@@ -124,10 +121,19 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     let mi = gScene.materials.getMaterialInstance(sd, lod);
     let bsdfProperties = mi.getProperties(sd);
 
-    float3 color = float3(0.0f, 0.0f, 0.0f);
+    float3 color = bsdfProperties.emission;
+    uint shadowLevelBitmap = 0;
 
     uint3 launchIndex = DispatchRaysIndex();
     TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(launchIndex.xy, sampleIndex);
+
+    // Calculate the pos in camera image plane
+    float3 hitPointCameraSpace = mul(viewMatrix, float4(sd.posW, 1)).xyz;
+    float4 hitPointNDC = mul(projectMatrix, float4(hitPointCameraSpace, 1));
+    hitPointNDC.xyz /= hitPointNDC.w;
+    float2 imagePlaneCoords;
+    imagePlaneCoords.x = (hitPointNDC.x + 1) * 0.5 * imageWidth;
+    imagePlaneCoords.y = (1 - hitPointNDC.y) * 0.5 * imageHeight; // Y is flipped in NDC
 
     // Direct lighting from analytic light sources.
     for (int i = 0; i < gScene.getLightCount(); i++)
@@ -138,15 +144,19 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
             RayDesc shadowRay = { sd.posW, 0.001f, ls.dir, ls.distance };
             if (traceShadowRay(shadowRay))
             {
-                color += mi.eval(sd, ls.dir, sg) * ls.Li;
+                // uint mask = 1 << i;
+                // shadowLevelBitmap |= mask;
+                // color += mi.eval(sd, ls.dir, sg) * ls.Li;
+
+                gOutput[imagePlaneCoords] = 1;
             }
         }
     }
-
-    // Shoot a reflection ray.
+    if (gOutput[imagePlaneCoords] != 1) {
+        gOutput[imagePlaneCoords] = 0;
+    }
     color += getReflectionColor(sd, bsdfProperties, v.normalW, rayDirW, hitData.depth);
-
-    hitData.color = float4(color, 1.f);
+    hitData.shadow = shadowLevelBitmap;
     hitData.hitT = hitT;
 }
 
@@ -183,5 +193,4 @@ void rayGen()
     PrimaryRayData hitData;
     hitData.depth = 0;
     TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index*/, rayTypeCount, 0, ray, hitData);
-    gOutput[launchIndex.xy] = hitData.color;
 }

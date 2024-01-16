@@ -9,6 +9,8 @@ target_sources(HelloDXR PRIVATE
     HelloDXR_overlap.rt.slang
     HelloDXR_no_shadow.rt.slang
     HelloDXR_upsample.rt.slang
+    HelloDXR_bitmask_view.rt.slang
+    HelloDXR_convert.rt.slang
 )
 
 target_copy_shaders(HelloDXR Samples/HelloDXR)

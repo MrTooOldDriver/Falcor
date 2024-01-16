@@ -53,7 +53,10 @@ private:
     void renderRT(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
     void renderCoarsePixelShadingRT(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
     void upsampleShadow(RenderContext* pRenderContext);
+    void bitmaskToShadowTexture(RenderContext* pRenderContext);
     void onShadowRenderFactorChange();
+    void startProfile(RenderContext* pRenderContext, const std::string& name);
+    void stopProfile(RenderContext* pRenderContext, const std::string& name);
 
     ref<Scene> mpScene;
     ref<Camera> mpCamera;
@@ -70,10 +73,17 @@ private:
 
     ref<Program> mpShadowRaytraceProgram;
     ref<RtProgramVars> mpShadowRtVars;
-    ref<Texture> mpShadowRtOut;
+    ref<Texture> mpShadowRtBitmaskOut;
+
+    ref<ComputePass> mpBitmaskToShadowTexture;
 
     ref<ComputePass> mpNNUpsamplePass;
     ref<ComputePass> mpBiLinearUpsamplePass;
+
+    ref<FullScreenPass> mpBitmaskView;
+    ref<Texture> mpDebugViewOut;
+
+    ref<Sampler> mSampler;
 
     ref<Texture> mpOverlapNormalIn;
     ref<Texture> mpOverlapShadowIn;
@@ -86,9 +96,12 @@ private:
     ref<Fbo> mpTempFbo2;
     ref<Fbo> mpTempFbo3;
 
+    Profiler* mpProfiler;
+
     float shadowRenderFactor = 1.0f;
 
     uint32_t currentDebugView = 0;
+    uint32_t currentUpSample = 0;
 
     bool hasShadowRenderedChanged = false;
     bool mRayTrace = true;
